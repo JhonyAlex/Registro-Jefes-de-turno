@@ -16,11 +16,9 @@ const ShiftForm: React.FC<ShiftFormProps> = ({ onRecordSaved }) => {
     machine: MachineType.WH1,
   });
 
-  // Handle inputs as strings to prevent "0" prefix issues on mobile
   const [metersInput, setMetersInput] = useState('');
   const [changesInput, setChangesInput] = useState('');
   
-  // Custom Comment Field State
   const [commentInput, setCommentInput] = useState('');
   const [availableComments, setAvailableComments] = useState<string[]>([]);
   const [filteredComments, setFilteredComments] = useState<string[]>([]);
@@ -29,9 +27,8 @@ const ShiftForm: React.FC<ShiftFormProps> = ({ onRecordSaved }) => {
 
   const [successMsg, setSuccessMsg] = useState('');
 
-  // Load comments initially and ensure they are up to date
-  const refreshComments = () => {
-    const comments = getAvailableComments();
+  const refreshComments = async () => {
+    const comments = await getAvailableComments();
     setAvailableComments(comments);
     return comments;
   };
@@ -40,7 +37,6 @@ const ShiftForm: React.FC<ShiftFormProps> = ({ onRecordSaved }) => {
     refreshComments();
   }, []);
 
-  // Filter logic
   useEffect(() => {
     if (!commentInput) {
       setFilteredComments(availableComments);
@@ -52,7 +48,6 @@ const ShiftForm: React.FC<ShiftFormProps> = ({ onRecordSaved }) => {
     }
   }, [commentInput, availableComments]);
 
-  // Click outside to close dropdown
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -79,14 +74,13 @@ const ShiftForm: React.FC<ShiftFormProps> = ({ onRecordSaved }) => {
   };
 
   const clearComment = (e: React.MouseEvent) => {
-    e.stopPropagation(); // Prevent triggering dropdown toggle if overlapping
+    e.stopPropagation();
     setCommentInput('');
     setFilteredComments(availableComments);
-    // Keep focus on input ideally, or just clear
   };
 
-  const handleInputFocus = () => {
-    refreshComments(); // Sync latest comments from storage on focus
+  const handleInputFocus = async () => {
+    await refreshComments();
     setShowSuggestions(true);
   };
 
@@ -95,20 +89,19 @@ const ShiftForm: React.FC<ShiftFormProps> = ({ onRecordSaved }) => {
     setShowSuggestions(false);
   };
 
-  const handleDeleteComment = (e: React.MouseEvent, comment: string) => {
+  const handleDeleteComment = async (e: React.MouseEvent, comment: string) => {
     e.stopPropagation();
     if (confirm(`¿Borrar "${comment}" de la lista de autocompletado?`)) {
-      deleteCustomComment(comment);
-      refreshComments();
+      await deleteCustomComment(comment);
+      await refreshComments();
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!metersInput) return;
 
-    const newRecord: ProductionRecord = {
-      id: crypto.randomUUID(),
+    const newRecord: Omit<ProductionRecord, 'id'> = {
       timestamp: Date.now(),
       date: formData.date,
       shift: formData.shift,
@@ -119,14 +112,12 @@ const ShiftForm: React.FC<ShiftFormProps> = ({ onRecordSaved }) => {
       changesComment: commentInput
     };
 
-    saveRecord(newRecord);
+    await saveRecord(newRecord);
     setSuccessMsg('Registro guardado');
     onRecordSaved();
     
-    // Refresh available comments in case a new one was added
-    refreshComments();
+    await refreshComments();
 
-    // Reset production fields only
     setMetersInput('');
     setChangesInput('');
     setCommentInput('');
@@ -149,7 +140,8 @@ const ShiftForm: React.FC<ShiftFormProps> = ({ onRecordSaved }) => {
 
       <form onSubmit={handleSubmit} className="p-6 space-y-6">
         
-        {/* Context Grid */}
+        {/* ... Rest of the form is unchanged ... */}
+        
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pb-6 border-b border-slate-100">
           <div>
             <label className="block text-sm font-semibold text-slate-700 mb-2 flex items-center gap-2">
