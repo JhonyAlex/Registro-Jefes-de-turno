@@ -9,12 +9,13 @@ import 'jspdf-autotable';
 // --- FIREBASE SETUP ---
 
 const firebaseConfig = {
-  apiKey: "AIzaSyD_qVRzPGYgf6fdxsNMnwwqTWk8Hphtiuk",
-  authDomain: "registro-jefe-de-turno-2026.firebaseapp.com",
-  projectId: "registro-jefe-de-turno-2026",
-  storageBucket: "registro-jefe-de-turno-2026.firebasestorage.app",
-  messagingSenderId: "135445352312",
-  appId: "1:135445352312:web:0dc221e5e8bd748280428d"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
 // Initialize Firebase
