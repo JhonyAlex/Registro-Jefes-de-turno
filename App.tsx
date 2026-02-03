@@ -1,41 +1,74 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { LayoutDashboard, PlusCircle, List, User, Trash2, Lock, AlertCircle, Filter, X } from 'lucide-react';
+import { LayoutDashboard, PlusCircle, List, User, Trash2, Lock, AlertCircle, Filter, X, Cloud, WifiOff, CloudOff, Edit, ChevronDown, ChevronUp, Calendar, Monitor, XCircle, FileDown, AlertTriangle, Clock, ChevronLeft, ChevronRight } from 'lucide-react';
 import ShiftForm from './components/ShiftForm';
 import Dashboard from './components/Dashboard';
-import { subscribeToRecords, clearAllRecords, deleteRecord } from './services/storageService';
+import { subscribeToRecords, clearAllRecords, deleteRecord, exportToExcel } from './services/storageService';
 import { ProductionRecord, FilterState } from './types';
 import { MACHINES, BOSSES } from './constants';
 
 type View = 'dashboard' | 'entry' | 'list';
 type DeleteMode = 'all' | 'single';
 
+const ITEMS_PER_PAGE = 15;
+
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<View>('entry');
   const [records, setRecords] = useState<ProductionRecord[]>([]);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [dbError, setDbError] = useState('');
+  
+  // Edit Mode State
+  const [editingRecord, setEditingRecord] = useState<ProductionRecord | null>(null);
   
   // Filtering State
   const [filters, setFilters] = useState<FilterState>({
     startDate: '',
     endDate: '',
     machine: '',
-    boss: ''
+    boss: '',
+    operator: ''
   });
   const [showFilters, setShowFilters] = useState(false);
+
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
 
   // Delete Modal State
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteMode, setDeleteMode] = useState<DeleteMode>('all');
+  const [deleteAllStep, setDeleteAllStep] = useState<1 | 2>(1); // 1: Export Warning, 2: Final Confirmation
   const [recordToDelete, setRecordToDelete] = useState<string | null>(null);
-  const [passwordInput, setPasswordInput] = useState('');
-  const [deleteError, setDeleteError] = useState('');
-
+  
   // Real-time synchronization
   useEffect(() => {
-    const unsubscribe = subscribeToRecords((updatedRecords) => {
-      setRecords(updatedRecords);
-    });
-    return () => unsubscribe();
+    const unsubscribe = subscribeToRecords(
+      (updatedRecords) => {
+        setRecords(updatedRecords);
+        // If we get data, we are connected
+        if (dbError && dbError.includes('Offline')) setDbError(''); 
+      },
+      (errorMsg) => {
+        setDbError(errorMsg);
+      }
+    );
+
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      unsubscribe();
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
   }, []);
+
+  // Calculate unique operators from existing records for the filter dropdown
+  const uniqueOperators = useMemo(() => {
+    const ops = new Set(records.map(r => r.operator).filter(Boolean));
+    return Array.from(ops).sort();
+  }, [records]);
 
   // Filter Logic
   const filteredRecords = useMemo(() => {
@@ -44,54 +77,175 @@ const App: React.FC = () => {
                         (!filters.endDate || r.date <= filters.endDate);
       const matchMachine = !filters.machine || r.machine === filters.machine;
       const matchBoss = !filters.boss || r.boss === filters.boss;
-      return matchDate && matchMachine && matchBoss;
+      const matchOperator = !filters.operator || r.operator === filters.operator;
+      return matchDate && matchMachine && matchBoss && matchOperator;
     });
   }, [records, filters]);
 
+  // Reset pagination when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filters]);
+
+  // Pagination Logic
+  const totalPages = Math.ceil(filteredRecords.length / ITEMS_PER_PAGE);
+  const paginatedRecords = useMemo(() => {
+    const start = (currentPage - 1) * ITEMS_PER_PAGE;
+    return filteredRecords.slice(start, start + ITEMS_PER_PAGE);
+  }, [filteredRecords, currentPage]);
+
+  const goToPage = (page: number) => {
+    if (page >= 1 && page <= totalPages) {
+      setCurrentPage(page);
+      // Scroll to top of list container if needed, or just top of window
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  // Count active filters
+  const activeFiltersCount = useMemo(() => {
+    let count = 0;
+    if (filters.startDate) count++;
+    if (filters.endDate) count++;
+    if (filters.machine) count++;
+    if (filters.boss) count++;
+    if (filters.operator) count++;
+    return count;
+  }, [filters]);
+
   const handleRecordSaved = () => {
-    // No manual reload needed, subscription handles it
+    setEditingRecord(null);
+  };
+
+  const handleEdit = (record: ProductionRecord) => {
+    setEditingRecord(record);
+    setCurrentView('entry');
+  };
+
+  const handleCancelEdit = () => {
+    setEditingRecord(null);
   };
 
   const initiateDeleteAll = () => {
     setDeleteMode('all');
+    setDeleteAllStep(1); 
     setRecordToDelete(null);
     setShowDeleteModal(true);
   };
 
-  const initiateDeleteSingle = (id: string) => {
+  const initiateDeleteSingle = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation(); // Prevent row click
     setDeleteMode('single');
     setRecordToDelete(id);
     setShowDeleteModal(true);
   };
 
+  const handleExportAndContinue = () => {
+    exportToExcel(records);
+    setDeleteAllStep(2);
+  };
+
   const handleConfirmDelete = () => {
-    // Universal Password Check for ANY deletion
-    if (passwordInput === 'Pigmea.2026') {
-      if (deleteMode === 'all') {
-        clearAllRecords();
-      } else if (deleteMode === 'single' && recordToDelete) {
-        deleteRecord(recordToDelete);
-      }
-      closeDeleteModal();
-    } else {
-      setDeleteError('Clave incorrecta. Autorización denegada.');
+    if (deleteMode === 'all') {
+      clearAllRecords();
+    } else if (deleteMode === 'single' && recordToDelete) {
+      deleteRecord(recordToDelete);
     }
+    closeDeleteModal();
   };
 
   const closeDeleteModal = () => {
     setShowDeleteModal(false);
-    setPasswordInput('');
-    setDeleteError('');
     setRecordToDelete(null);
+    setDeleteAllStep(1);
   };
 
   const clearFilters = () => {
-    setFilters({ startDate: '', endDate: '', machine: '', boss: '' });
+    setFilters({ startDate: '', endDate: '', machine: '', boss: '', operator: '' });
+    setShowFilters(false);
+  };
+
+  const applyDateShortcut = (type: 'today' | 'yesterday' | 'thisWeek' | 'lastWeek' | 'thisMonth' | 'lastMonth' | 'thisYear' | 'lastYear' | 'last3Months') => {
+    const today = new Date();
+    let start = new Date(today);
+    let end = new Date(today);
+
+    const formatDate = (d: Date) => {
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+
+    switch (type) {
+      case 'today': break;
+      case 'yesterday':
+        start.setDate(today.getDate() - 1);
+        end.setDate(today.getDate() - 1);
+        break;
+      case 'thisWeek':
+        const dayOfWeek = today.getDay() || 7; 
+        start.setDate(today.getDate() - dayOfWeek + 1); 
+        break;
+      case 'lastWeek':
+        const dayCurrent = today.getDay() || 7;
+        start.setDate(today.getDate() - dayCurrent - 6); 
+        end.setDate(today.getDate() - dayCurrent); 
+        break;
+      case 'thisMonth':
+        start.setDate(1);
+        end = new Date(today.getFullYear(), today.getMonth() + 1, 0); 
+        break;
+      case 'lastMonth':
+        start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+        end = new Date(today.getFullYear(), today.getMonth(), 0);
+        break;
+      case 'thisYear':
+        start = new Date(today.getFullYear(), 0, 1);
+        end = new Date(today.getFullYear(), 11, 31);
+        break;
+      case 'lastYear':
+        start = new Date(today.getFullYear() - 1, 0, 1);
+        end = new Date(today.getFullYear() - 1, 11, 31);
+        break;
+      case 'last3Months':
+        start.setMonth(today.getMonth() - 3);
+        break;
+    }
+
+    setFilters(prev => ({
+      ...prev,
+      startDate: formatDate(start),
+      endDate: formatDate(end)
+    }));
+  };
+
+  const changeView = (view: View) => {
+    setCurrentView(view);
+    if (view !== 'entry') {
+      setEditingRecord(null);
+    } else if (currentView !== 'entry') {
+      setEditingRecord(null);
+    }
+  };
+
+  const isConnectionLost = !isOnline || (dbError && dbError.includes('Offline'));
+
+  // Safe wrapper for showPicker to handle security restrictions
+  const safeShowPicker = (e: React.MouseEvent<HTMLInputElement>) => {
+    try {
+      if ('showPicker' in e.target) {
+        (e.target as any).showPicker();
+      }
+    } catch (err) {
+      // Silently fail if showPicker is blocked by security context (e.g. cross-origin iframe)
+      // The user can still click the calendar icon provided by the browser
+    }
   };
 
   const NavItem = ({ view, icon: Icon, label, mobileOnly = false }: { view: View; icon: any; label: string, mobileOnly?: boolean }) => (
     <button
-      onClick={() => setCurrentView(view)}
+      onClick={() => changeView(view)}
       className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all w-full md:w-auto 
         ${mobileOnly ? 'flex-col gap-1 py-1 px-1 justify-center' : ''}
         ${currentView === view 
@@ -107,7 +261,6 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen flex flex-col md:flex-row bg-slate-50 relative">
       
-      {/* --- DESKTOP SIDEBAR (Hidden on Mobile) --- */}
       <aside className="hidden md:flex bg-white border-r border-slate-200 w-64 flex-shrink-0 z-20 h-screen sticky top-0 flex-col">
         <div className="p-6 border-b border-slate-100 flex items-center gap-3">
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-blue-900/50">
@@ -125,67 +278,179 @@ const App: React.FC = () => {
         <div className="mt-auto p-6">
           <div className="bg-slate-50 p-4 rounded-xl border border-slate-100">
             <p className="text-xs text-slate-500 font-medium">Estado del Sistema</p>
-            <div className="mt-2 flex items-center gap-2 text-xs text-slate-600">
-              <span className="w-2 h-2 bg-green-500 rounded-full"></span>
-              Almacenamiento Local
+            <div className={`mt-2 flex items-center gap-2 text-xs font-bold ${dbError ? 'text-red-500' : 'text-green-600'}`}>
+              {dbError ? (
+                <>
+                  <AlertCircle className="w-4 h-4" />
+                  <span>Error Config</span>
+                </>
+              ) : (
+                <>
+                  <Cloud className="w-4 h-4" />
+                  <span>Nube Activa</span>
+                </>
+              )}
             </div>
-            <p className="text-[10px] text-slate-400 mt-1 leading-tight">Datos guardados en este dispositivo.</p>
+            <p className="text-[10px] text-slate-400 mt-1 leading-tight">
+              {dbError ? 'Requiere atención.' : 'Sincronización en tiempo real.'}
+            </p>
           </div>
         </div>
       </aside>
 
-      {/* --- MAIN CONTENT --- */}
       <main className="flex-1 p-4 md:p-8 overflow-y-auto h-screen pb-28 md:pb-8">
         <div className="max-w-6xl mx-auto space-y-6">
           
-          {/* Global Filter Bar (Visible in Dashboard & List) */}
-          {(currentView === 'dashboard' || currentView === 'list') && (
-            <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 animate-fade-in-up">
-              <div className="flex justify-between items-center mb-4 cursor-pointer" onClick={() => setShowFilters(!showFilters)}>
-                <div className="flex items-center gap-2">
-                  <Filter className="w-4 h-4 text-blue-600" />
-                  <span className="font-bold text-slate-700 text-sm">Filtros de Datos</span>
-                  {(filters.startDate || filters.endDate || filters.machine || filters.boss) && (
-                    <span className="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full font-bold">Activos</span>
-                  )}
+          {dbError && !dbError.includes('Offline') && (
+            <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-r shadow-sm animate-fade-in mb-4">
+              <div className="flex items-start">
+                <AlertCircle className="w-5 h-5 text-red-500 mt-0.5 mr-3 flex-shrink-0" />
+                <div>
+                  <h3 className="text-sm font-bold text-red-800">Acción Requerida: Configuración de Base de Datos</h3>
+                  <p className="text-sm text-red-700 mt-1">{dbError}</p>
                 </div>
-                <div className="text-blue-600 text-xs font-bold hover:underline">
-                  {showFilters ? 'Ocultar' : 'Mostrar'}
+              </div>
+            </div>
+          )}
+
+          {(currentView === 'dashboard' || currentView === 'list') && (
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 animate-fade-in-up overflow-visible transition-all duration-300">
+              <div 
+                className="p-4 flex justify-between items-center cursor-pointer bg-white hover:bg-slate-50 transition-colors"
+                onClick={() => setShowFilters(!showFilters)}
+              >
+                <div className="flex items-center gap-3">
+                  <div className={`p-2 rounded-lg transition-colors ${showFilters || activeFiltersCount > 0 ? 'bg-blue-100 text-blue-600' : 'bg-slate-100 text-slate-500'}`}>
+                    <Filter className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+                      Filtros de Datos
+                      {activeFiltersCount > 0 && (
+                        <span className="bg-blue-600 text-white text-[10px] px-2 py-0.5 rounded-full font-bold">
+                          {activeFiltersCount} Activos
+                        </span>
+                      )}
+                    </h3>
+                    <p className="text-xs text-slate-400 hidden sm:block">
+                      {showFilters ? 'Configura los criterios de búsqueda' : 'Haz clic para desplegar opciones'}
+                    </p>
+                  </div>
+                </div>
+                <div className="text-slate-400">
+                  {showFilters ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
                 </div>
               </div>
               
               {showFilters && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 pt-2 border-t border-slate-100">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-500 mb-1">Desde</label>
-                    <input type="date" className="w-full p-2 bg-slate-50 border rounded text-sm" 
-                           value={filters.startDate} onChange={e => setFilters({...filters, startDate: e.target.value})} />
+                <div className="p-5 border-t border-slate-100 bg-slate-50/50">
+                  
+                  <div className="mb-4 flex gap-2 flex-wrap">
+                    <span className="text-xs font-bold text-slate-400 flex items-center gap-1 mr-2">
+                      <Clock className="w-3 h-3" /> Accesos rápidos:
+                    </span>
+                    <button onClick={() => applyDateShortcut('today')} className="text-xs px-3 py-1 bg-white border border-slate-200 rounded-full hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition-colors text-slate-600 font-medium">Hoy</button>
+                    <button onClick={() => applyDateShortcut('yesterday')} className="text-xs px-3 py-1 bg-white border border-slate-200 rounded-full hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition-colors text-slate-600 font-medium">Ayer</button>
+                    <button onClick={() => applyDateShortcut('thisWeek')} className="text-xs px-3 py-1 bg-white border border-slate-200 rounded-full hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition-colors text-slate-600 font-medium">Esta Sem.</button>
+                    <button onClick={() => applyDateShortcut('lastWeek')} className="text-xs px-3 py-1 bg-white border border-slate-200 rounded-full hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition-colors text-slate-600 font-medium">Sem. Ant.</button>
+                    <button onClick={() => applyDateShortcut('thisMonth')} className="text-xs px-3 py-1 bg-white border border-slate-200 rounded-full hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition-colors text-slate-600 font-medium">Este Mes</button>
+                    <button onClick={() => applyDateShortcut('lastMonth')} className="text-xs px-3 py-1 bg-white border border-slate-200 rounded-full hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition-colors text-slate-600 font-medium">Mes Pasado</button>
+                    <button onClick={() => applyDateShortcut('last3Months')} className="text-xs px-3 py-1 bg-white border border-slate-200 rounded-full hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition-colors text-slate-600 font-medium">3 Meses</button>
+                    <button onClick={() => applyDateShortcut('thisYear')} className="text-xs px-3 py-1 bg-white border border-slate-200 rounded-full hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200 transition-colors text-slate-600 font-medium">Este Año</button>
                   </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-500 mb-1">Hasta</label>
-                    <input type="date" className="w-full p-2 bg-slate-50 border rounded text-sm"
-                           value={filters.endDate} onChange={e => setFilters({...filters, endDate: e.target.value})} />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-500 mb-1">Máquina</label>
-                    <select className="w-full p-2 bg-slate-50 border rounded text-sm"
-                            value={filters.machine} onChange={e => setFilters({...filters, machine: e.target.value})}>
-                      <option value="">Todas</option>
-                      {MACHINES.map(m => <option key={m} value={m}>{m}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-500 mb-1">Jefe de Turno</label>
-                    <select className="w-full p-2 bg-slate-50 border rounded text-sm"
-                            value={filters.boss} onChange={e => setFilters({...filters, boss: e.target.value})}>
-                      <option value="">Todos</option>
-                      {BOSSES.map(b => <option key={b} value={b}>{b}</option>)}
-                    </select>
-                  </div>
-                  <div className="md:col-span-4 flex justify-end">
-                     <button onClick={clearFilters} className="text-xs text-slate-400 hover:text-red-500 font-medium">
-                       Limpiar Filtros
-                     </button>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+                    
+                    <div className="relative">
+                      <label className="block text-xs font-bold text-slate-500 mb-1.5 ml-1">Desde</label>
+                      <div className="relative">
+                        <Calendar className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input 
+                          type="date" 
+                          className="w-full pl-9 pr-3 py-2.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all shadow-sm cursor-pointer"
+                          value={filters.startDate} 
+                          onChange={e => setFilters({...filters, startDate: e.target.value})}
+                          onClick={safeShowPicker}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="relative">
+                      <label className="block text-xs font-bold text-slate-500 mb-1.5 ml-1">Hasta</label>
+                      <div className="relative">
+                        <Calendar className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input 
+                          type="date" 
+                          className="w-full pl-9 pr-3 py-2.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all shadow-sm cursor-pointer"
+                          value={filters.endDate} 
+                          onChange={e => setFilters({...filters, endDate: e.target.value})} 
+                          onClick={safeShowPicker}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="relative">
+                      <label className="block text-xs font-bold text-slate-500 mb-1.5 ml-1">Máquina</label>
+                      <div className="relative">
+                        <Monitor className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <select 
+                          className="w-full pl-9 pr-8 py-2.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all appearance-none shadow-sm cursor-pointer"
+                          value={filters.machine} 
+                          onChange={e => setFilters({...filters, machine: e.target.value})}
+                        >
+                          <option value="">Todas</option>
+                          {MACHINES.map(m => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                        <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      </div>
+                    </div>
+
+                    <div className="relative">
+                      <label className="block text-xs font-bold text-slate-500 mb-1.5 ml-1">Jefe de Turno</label>
+                      <div className="relative">
+                        <User className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <select 
+                          className="w-full pl-9 pr-8 py-2.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all appearance-none shadow-sm cursor-pointer"
+                          value={filters.boss} 
+                          onChange={e => setFilters({...filters, boss: e.target.value})}
+                        >
+                          <option value="">Todos</option>
+                          {BOSSES.map(b => <option key={b} value={b}>{b}</option>)}
+                        </select>
+                        <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      </div>
+                    </div>
+                    
+                    <div className="relative">
+                      <label className="block text-xs font-bold text-slate-500 mb-1.5 ml-1">Operario</label>
+                      <div className="relative">
+                        <User className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <select 
+                          className="w-full pl-9 pr-8 py-2.5 bg-white border border-slate-200 rounded-lg text-sm font-medium text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all appearance-none shadow-sm cursor-pointer"
+                          value={filters.operator} 
+                          onChange={e => setFilters({...filters, operator: e.target.value})}
+                        >
+                          <option value="">Todos</option>
+                          {uniqueOperators.map(op => <option key={op} value={op}>{op}</option>)}
+                        </select>
+                        <ChevronDown className="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      </div>
+                    </div>
+
+                    <div className="flex items-end lg:col-span-5">
+                       <button 
+                         onClick={clearFilters} 
+                         disabled={activeFiltersCount === 0}
+                         className={`w-full py-2.5 px-4 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all shadow-sm border
+                           ${activeFiltersCount > 0 
+                             ? 'bg-red-50 text-red-600 border-red-100 hover:bg-red-100' 
+                             : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                           }`}
+                       >
+                         <XCircle className="w-4 h-4" />
+                         Limpiar Filtros
+                       </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -194,38 +459,53 @@ const App: React.FC = () => {
 
           {currentView === 'entry' && (
             <div className="animate-fade-in-up">
-              <div className="mb-6">
-                <h2 className="text-2xl font-bold text-slate-900">Registro de Turno</h2>
-                <p className="text-slate-500 text-sm">Ingresa los datos de producción en tiempo real.</p>
+              <div className="mb-6 flex justify-between items-center">
+                <div>
+                  <h2 className="text-2xl font-bold text-slate-900">
+                    {editingRecord ? 'Editar Registro' : 'Registro de Turno'}
+                  </h2>
+                  <p className="text-slate-500 text-sm">
+                    {editingRecord ? 'Modificando datos existentes.' : 'Ingresa los datos de producción.'}
+                  </p>
+                </div>
+                <div className="md:hidden">
+                   <Cloud className="w-5 h-5 text-green-500" />
+                </div>
               </div>
-              <ShiftForm onRecordSaved={handleRecordSaved} />
+              <ShiftForm 
+                onRecordSaved={handleRecordSaved} 
+                editingRecord={editingRecord}
+                onCancelEdit={handleCancelEdit}
+              />
               
-              {/* Mini Recent List */}
-              <div className="mt-8 mb-20 md:mb-0">
-                <div className="flex justify-between items-end mb-4">
-                   <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Últimos Registros</h3>
-                   <span className="text-xs text-green-600 font-medium flex items-center gap-1">
-                     <span className="w-2 h-2 bg-green-500 rounded-full"></span> Sincronizado
-                   </span>
-                </div>
-                <div className="bg-white rounded-xl shadow-sm border border-slate-200 divide-y divide-slate-100">
-                  {records.slice(0, 3).map(r => (
-                    <div key={r.id} className="p-4 flex justify-between items-center">
-                      <div>
-                        <span className="font-bold text-slate-800 block">{r.machine}</span>
-                        <span className="text-xs text-slate-500">{r.shift} • {r.boss}</span>
+              {!editingRecord && (
+                <div className="mt-8 mb-20 md:mb-0">
+                  <div className="flex justify-between items-end mb-4">
+                     <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider">Últimos Registros</h3>
+                     <span className="text-xs text-green-600 font-medium flex items-center gap-1">
+                       <span className="w-2 h-2 rounded-full bg-green-500"></span> 
+                       Sincronizado
+                     </span>
+                  </div>
+                  <div className="bg-white rounded-xl shadow-sm border border-slate-200 divide-y divide-slate-100">
+                    {records.slice(0, 3).map(r => (
+                      <div key={r.id} className="p-4 flex justify-between items-center cursor-pointer hover:bg-slate-50 transition-colors" onClick={() => handleEdit(r)}>
+                        <div>
+                          <span className="font-bold text-slate-800 block">{r.machine}</span>
+                          <span className="text-xs text-slate-500">{r.shift} • {r.boss}</span>
+                        </div>
+                        <div className="text-right">
+                          <span className="font-mono font-bold text-blue-600 block">{r.meters.toLocaleString()} m</span>
+                          <span className="text-xs text-slate-400">{r.changesCount} cambios</span>
+                        </div>
                       </div>
-                      <div className="text-right">
-                        <span className="font-mono font-bold text-blue-600 block">{r.meters.toLocaleString()} m</span>
-                        <span className="text-xs text-slate-400">{r.changesCount} cambios</span>
-                      </div>
-                    </div>
-                  ))}
-                  {records.length === 0 && (
-                    <div className="p-4 text-center text-slate-400 italic text-sm">Sin registros hoy</div>
-                  )}
+                    ))}
+                    {records.length === 0 && (
+                      <div className="p-4 text-center text-slate-400 italic text-sm">Sin registros hoy</div>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
 
@@ -240,9 +520,14 @@ const App: React.FC = () => {
               <div className="flex justify-between items-center mb-6 flex-wrap gap-4">
                 <div>
                   <h2 className="text-2xl font-bold text-slate-900">Historial</h2>
-                  <span className="text-sm bg-slate-200 px-3 py-1 rounded-full text-slate-600 font-medium mt-1 inline-block">
-                    {filteredRecords.length} registros
-                  </span>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-sm bg-slate-200 px-3 py-1 rounded-full text-slate-600 font-medium inline-block">
+                      {filteredRecords.length} registros totales
+                    </span>
+                    <span className="text-xs text-slate-400">
+                      (Página {currentPage} de {totalPages || 1})
+                    </span>
+                  </div>
                 </div>
                 
                 {records.length > 0 && (
@@ -256,30 +541,43 @@ const App: React.FC = () => {
                 )}
               </div>
               
-              <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-                <div className="overflow-x-auto">
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex flex-col min-h-[500px]">
+                <div className="overflow-x-auto flex-1">
                   <table className="w-full text-sm text-left">
                     <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
                       <tr>
                         <th className="px-6 py-4">Fecha</th>
+                        <th className="px-6 py-4">Turno</th>
                         <th className="px-6 py-4">Máq.</th>
+                        <th className="px-6 py-4">Operario</th>
                         <th className="px-6 py-4 text-right">Metros</th>
                         <th className="px-6 py-4 text-center hidden sm:table-cell">Cambios</th>
                         <th className="px-6 py-4 hidden sm:table-cell">Comentarios</th>
-                        <th className="px-6 py-4 text-center">Acción</th>
+                        <th className="px-6 py-4 text-center">Acciones</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {filteredRecords.map((r) => (
-                        <tr key={r.id} className="hover:bg-slate-50 transition-colors group">
+                      {paginatedRecords.map((r) => (
+                        <tr 
+                          key={r.id} 
+                          onClick={() => handleEdit(r)}
+                          className="hover:bg-blue-50 transition-colors group cursor-pointer active:bg-blue-100"
+                        >
                           <td className="px-6 py-4 text-slate-600 whitespace-nowrap">
                             <div className="font-bold text-slate-800">{r.date}</div>
-                            <div className="text-xs">{r.shift}</div>
+                          </td>
+                          <td className="px-6 py-4 text-slate-600 whitespace-nowrap">
+                            <span className="bg-slate-100 text-slate-600 px-2 py-1 rounded text-xs font-bold border border-slate-200">
+                              {r.shift}
+                            </span>
                           </td>
                           <td className="px-6 py-4 font-medium text-slate-800">
                             <span className="bg-blue-50 text-blue-700 px-2 py-1 rounded border border-blue-100 text-xs font-bold">
                               {r.machine}
                             </span>
+                          </td>
+                          <td className="px-6 py-4 text-slate-600 font-medium">
+                            {r.operator || '-'}
                           </td>
                           <td className="px-6 py-4 text-right font-mono text-slate-700">
                             {r.meters.toLocaleString()}
@@ -291,22 +589,58 @@ const App: React.FC = () => {
                             {r.changesComment}
                           </td>
                           <td className="px-6 py-4 text-center">
-                            <button 
-                              onClick={() => initiateDeleteSingle(r.id)}
-                              className="p-2 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded-full transition-all"
-                              title="Borrar registro"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+                            <div className="flex items-center justify-center gap-1">
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); handleEdit(r); }}
+                                className="p-2 text-slate-300 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-all"
+                                title="Editar registro"
+                              >
+                                <Edit className="w-4 h-4" />
+                              </button>
+                              <button 
+                                onClick={(e) => initiateDeleteSingle(r.id, e)}
+                                className="p-2 text-slate-300 hover:text-red-600 hover:bg-red-50 rounded-full transition-all"
+                                title="Borrar registro"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
+                  {paginatedRecords.length === 0 && (
+                    <div className="p-12 text-center text-slate-400">
+                      {records.length > 0 ? 'No hay resultados con los filtros actuales.' : 'Base de datos vacía.'}
+                    </div>
+                  )}
                 </div>
-                {filteredRecords.length === 0 && (
-                  <div className="p-12 text-center text-slate-400">
-                    {records.length > 0 ? 'No hay resultados con los filtros actuales.' : 'Base de datos vacía.'}
+
+                {/* Pagination Footer */}
+                {totalPages > 1 && (
+                  <div className="border-t border-slate-100 p-4 bg-slate-50 flex items-center justify-between">
+                     <button
+                       onClick={() => goToPage(currentPage - 1)}
+                       disabled={currentPage === 1}
+                       className="p-2 rounded-lg bg-white border border-slate-200 text-slate-600 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-100 transition-colors flex items-center gap-2 text-sm font-bold"
+                     >
+                       <ChevronLeft className="w-4 h-4" />
+                       Anterior
+                     </button>
+                     
+                     <div className="text-sm font-medium text-slate-600 hidden sm:block">
+                        Página {currentPage} de {totalPages}
+                     </div>
+
+                     <button
+                       onClick={() => goToPage(currentPage + 1)}
+                       disabled={currentPage === totalPages}
+                       className="p-2 rounded-lg bg-white border border-slate-200 text-slate-600 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-100 transition-colors flex items-center gap-2 text-sm font-bold"
+                     >
+                       Siguiente
+                       <ChevronRight className="w-4 h-4" />
+                     </button>
                   </div>
                 )}
               </div>
@@ -315,68 +649,130 @@ const App: React.FC = () => {
         </div>
       </main>
 
-      {/* --- MOBILE BOTTOM NAVIGATION (Fixed & High Z-Index) --- */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 pb-safe z-40 flex justify-around items-center px-2 shadow-[0_-4px_10px_rgba(0,0,0,0.05)] h-[70px]">
         <NavItem view="entry" icon={PlusCircle} label="Registro" mobileOnly />
         <NavItem view="dashboard" icon={LayoutDashboard} label="Data" mobileOnly />
         <NavItem view="list" icon={List} label="Historial" mobileOnly />
       </nav>
 
-      {/* --- DELETE CONFIRMATION MODAL --- */}
+      {isConnectionLost && (
+        <div className="fixed inset-0 z-[100] bg-slate-900/90 backdrop-blur-sm flex items-center justify-center p-6 animate-fade-in">
+          <div className="bg-white rounded-2xl p-8 max-w-md w-full text-center shadow-2xl transform scale-100">
+            <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-6 text-red-500 animate-pulse">
+              <CloudOff className="w-10 h-10" />
+            </div>
+            <h2 className="text-2xl font-bold text-slate-900 mb-2">Conexión Interrumpida</h2>
+            <p className="text-slate-500 mb-6">
+              La aplicación requiere una conexión activa a internet y al servidor para garantizar la integridad de los datos.
+            </p>
+            <div className="bg-red-50 border border-red-100 rounded-lg p-4 text-sm text-red-700 font-medium">
+               Por favor verifique su conexión WiFi o Datos Móviles para continuar.
+            </div>
+            <div className="mt-8 text-xs text-slate-400">
+               Estado: {dbError ? 'Servidor no disponible' : 'Sin Internet'}
+            </div>
+          </div>
+        </div>
+      )}
+
       {showDeleteModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden animate-scale-in">
-            <div className="bg-red-50 p-6 flex flex-col items-center text-center border-b border-red-100">
-              <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mb-3 text-red-600">
-                <Trash2 className="w-6 h-6" />
-              </div>
-              <h3 className="text-lg font-bold text-slate-900">
-                {deleteMode === 'all' ? '¿Borrar todo el historial?' : '¿Borrar registro?'}
-              </h3>
-              <p className="text-sm text-slate-500 mt-1">
-                {deleteMode === 'all' 
-                  ? 'Esta acción es irreversible y borrará los datos.'
-                  : 'Se solicitará clave de supervisor para confirmar.'}
-              </p>
-            </div>
-            
-            <div className="p-6 space-y-4">
-              {/* Password Field is now ALWAYS shown */}
-              <div>
-                <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Contraseña de Supervisor</label>
-                <div className="relative">
-                  <input 
-                    type="password" 
-                    value={passwordInput}
-                    onChange={(e) => setPasswordInput(e.target.value)}
-                    placeholder="Ingrese clave de seguridad"
-                    className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none"
-                    autoFocus
-                  />
-                  <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            {deleteMode === 'all' && deleteAllStep === 1 ? (
+              <>
+                <div className="bg-yellow-50 p-6 flex flex-col items-center text-center border-b border-yellow-100">
+                   <div className="w-12 h-12 bg-yellow-100 rounded-full flex items-center justify-center mb-3 text-yellow-600">
+                     <AlertTriangle className="w-6 h-6" />
+                   </div>
+                   <h3 className="text-lg font-bold text-slate-900">Advertencia de Seguridad</h3>
+                   <p className="text-sm text-slate-600 mt-2">
+                     Estás a punto de borrar <strong>TODA</strong> la base de datos ({records.length} registros).
+                   </p>
+                   <p className="text-sm text-slate-500 mt-1">
+                     Se recomienda encarecidamente descargar una copia de seguridad en Excel antes de continuar.
+                   </p>
                 </div>
-                {deleteError && (
-                  <div className="flex items-center gap-2 text-red-600 text-xs mt-2 font-medium animate-shake">
-                    <AlertCircle className="w-3 h-3" /> {deleteError}
+                <div className="p-6 space-y-3">
+                   <button 
+                     onClick={handleExportAndContinue}
+                     className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg bg-green-600 text-white font-bold hover:bg-green-700 shadow-md transition-colors"
+                   >
+                     <FileDown className="w-5 h-5" />
+                     Descargar Excel
+                   </button>
+                   
+                   <div className="flex gap-3 pt-2">
+                     <button 
+                       onClick={closeDeleteModal}
+                       className="flex-1 px-4 py-3 rounded-lg text-slate-600 font-bold bg-slate-100 hover:bg-slate-200 transition-colors"
+                     >
+                       Cancelar
+                     </button>
+                     <button 
+                       onClick={() => setDeleteAllStep(2)}
+                       className="flex-1 px-4 py-3 rounded-lg text-red-600 font-medium hover:bg-red-50 transition-colors text-sm underline decoration-red-200"
+                     >
+                       Saltar y Borrar
+                     </button>
+                   </div>
+                </div>
+              </>
+            ) : deleteMode === 'all' && deleteAllStep === 2 ? (
+              <>
+                <div className="bg-red-50 p-6 flex flex-col items-center text-center border-b border-red-100">
+                  <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mb-3 text-red-600 animate-pulse">
+                    <Trash2 className="w-6 h-6" />
                   </div>
-                )}
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <button 
-                  onClick={closeDeleteModal}
-                  className="px-4 py-3 rounded-lg text-slate-600 font-bold hover:bg-slate-100 transition-colors"
-                >
-                  Cancelar
-                </button>
-                <button 
-                  onClick={handleConfirmDelete}
-                  className="px-4 py-3 rounded-lg bg-red-600 text-white font-bold hover:bg-red-700 shadow-md transition-colors"
-                >
-                  {deleteMode === 'all' ? 'Borrar Todo' : 'Borrar'}
-                </button>
-              </div>
-            </div>
+                  <h3 className="text-lg font-bold text-red-900">¿Estás absolutamente seguro?</h3>
+                  <p className="text-sm text-red-700 mt-2 font-medium">
+                    Esta acción NO se puede deshacer.
+                  </p>
+                  <p className="text-sm text-red-600 mt-1">
+                    Todos los registros se perderán permanentemente.
+                  </p>
+                </div>
+                <div className="p-6 flex gap-3">
+                  <button 
+                    onClick={closeDeleteModal}
+                    className="flex-1 px-4 py-3 rounded-lg text-slate-600 font-bold bg-slate-100 hover:bg-slate-200 transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button 
+                    onClick={handleConfirmDelete}
+                    className="flex-1 px-4 py-3 rounded-lg bg-red-600 text-white font-bold hover:bg-red-700 shadow-lg shadow-red-200 transition-colors"
+                  >
+                    SÍ, BORRAR TODO
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="bg-slate-50 p-6 flex flex-col items-center text-center border-b border-slate-100">
+                  <div className="w-12 h-12 bg-slate-200 rounded-full flex items-center justify-center mb-3 text-slate-500">
+                    <Trash2 className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-lg font-bold text-slate-900">¿Confirmar eliminación?</h3>
+                  <p className="text-sm text-slate-500 mt-1">
+                    Este registro se eliminará permanentemente.
+                  </p>
+                </div>
+                <div className="p-6 grid grid-cols-2 gap-3">
+                  <button 
+                    onClick={closeDeleteModal}
+                    className="px-4 py-3 rounded-lg text-slate-600 font-bold hover:bg-slate-100 transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button 
+                    onClick={handleConfirmDelete}
+                    className="px-4 py-3 rounded-lg bg-red-600 text-white font-bold hover:bg-red-700 shadow-md transition-colors"
+                  >
+                    Borrar
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

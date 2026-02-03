@@ -5,7 +5,9 @@ export enum MachineType {
   NEXUS = 'NEXUS',
   SL2 = 'SL2',
   M21 = '21',
-  M22 = '22'
+  M22 = '22',
+  S2DT = 'S2DT',
+  PROSLIT = 'PROSLIT'
 }
 
 export enum ShiftType {
@@ -16,7 +18,8 @@ export enum ShiftType {
 
 export enum BossType {
   MARTIN = 'J.Martín',
-  NAVARRO = 'J.Navarro'
+  NAVARRO = 'J.Navarro',
+  CESAR = 'César'
 }
 
 export interface ProductionRecord {
@@ -29,6 +32,7 @@ export interface ProductionRecord {
   changesComment: string;
   shift: ShiftType;
   boss: BossType;
+  operator: string; // New field
 }
 
 export interface ProductionStats {
@@ -43,4 +47,5 @@ export interface FilterState {
   endDate: string;
   machine: string;
   boss: string;
+  operator: string;
 }

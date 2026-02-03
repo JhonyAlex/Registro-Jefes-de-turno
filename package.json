@@ -16,7 +16,9 @@
     "xlsx": "latest",
     "jspdf": "2.5.1",
     "jspdf-autotable": "3.8.2",
-    "@google/genai": "0.1.1"
+    "html2canvas": "1.4.1",
+    "@google/genai": "0.1.1",
+    "firebase": "^12.8.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
