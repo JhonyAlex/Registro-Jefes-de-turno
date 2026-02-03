@@ -1,109 +1,119 @@
-import { initializeApp } from 'firebase/app';
-import { getDatabase, ref, onValue, push, remove, set } from 'firebase/database';
 import { ProductionRecord } from '../types';
 import { COMMON_COMMENTS } from '../constants';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
 
-// --- FIREBASE SETUP ---
-
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  databaseURL: import.meta.env.VITE_FIREBASE_DATABASE_URL,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID
-};
-
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-const db = getDatabase(app);
-
-const RECORDS_REF = 'productionRecords';
-const CUSTOM_COMMENTS_REF = 'customComments';
+const STORAGE_KEY = 'pigmea_production_data_v1';
+const CUSTOM_COMMENTS_KEY = 'pigmea_custom_comments_v1';
+const SYNC_CHANNEL = new BroadcastChannel('pigmea_realtime_sync');
+const LOCAL_EVENT_NAME = 'pigmea_local_update';
 
 // --- DATA MANAGEMENT ---
 
-export const getAvailableComments = async (): Promise<string[]> => {
-  const commentsRef = ref(db, CUSTOM_COMMENTS_REF);
-  return new Promise((resolve) => {
-    onValue(commentsRef, (snapshot) => {
-      const customComments: string[] = snapshot.exists() ? snapshot.val() : [];
-      // Merge defaults with custom, remove duplicates, sort alphabetically
-      const allComments = Array.from(new Set([...COMMON_COMMENTS, ...customComments])).sort();
-      resolve(allComments);
-    }, { onlyOnce: true });
-  });
+const getRecordsInternal = (): ProductionRecord[] => {
+  const data = localStorage.getItem(STORAGE_KEY);
+  return data ? JSON.parse(data) : [];
 };
 
-export const saveRecord = async (record: Omit<ProductionRecord, 'id'>): Promise<void> => {
-    const recordsRef = ref(db, RECORDS_REF);
-    const newRecordRef = push(recordsRef);
-    await set(newRecordRef, record);
+export const getRecords = (): ProductionRecord[] => {
+  return getRecordsInternal();
+};
 
+export const getAvailableComments = (): string[] => {
+  const customData = localStorage.getItem(CUSTOM_COMMENTS_KEY);
+  const customComments = customData ? JSON.parse(customData) : [];
+  // Merge defaults with custom, remove duplicates, sort alphabetically
+  return Array.from(new Set([...COMMON_COMMENTS, ...customComments])).sort();
+};
+
+const notifyUpdates = () => {
+  // Notify other tabs
+  SYNC_CHANNEL.postMessage({ type: 'UPDATE' });
+  // Notify current tab components immediately
+  window.dispatchEvent(new Event(LOCAL_EVENT_NAME));
+};
+
+export const saveRecord = (record: ProductionRecord): ProductionRecord[] => {
+  const current = getRecordsInternal();
+  const updated = [record, ...current];
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+  
   // Logic to save new custom comment if it's not in the default list
   if (record.changesComment && !COMMON_COMMENTS.includes(record.changesComment)) {
-    const commentsRef = ref(db, CUSTOM_COMMENTS_REF);
-    onValue(commentsRef, async (snapshot) => {
-        const currentComments: string[] = snapshot.exists() ? snapshot.val() : [];
-        if (!currentComments.includes(record.changesComment)) {
-            await set(ref(db, `${CUSTOM_COMMENTS_REF}/${currentComments.length}`), record.changesComment);
-        }
-    }, { onlyOnce: true });
+    const customData = localStorage.getItem(CUSTOM_COMMENTS_KEY);
+    const customComments: string[] = customData ? JSON.parse(customData) : [];
+    
+    if (!customComments.includes(record.changesComment)) {
+      customComments.push(record.changesComment);
+      localStorage.setItem(CUSTOM_COMMENTS_KEY, JSON.stringify(customComments));
+    }
   }
+
+  notifyUpdates();
+  return updated;
 };
 
-export const deleteRecord = (id: string): Promise<void> => {
-  const recordRef = ref(db, `${RECORDS_REF}/${id}`);
-  return remove(recordRef);
+export const deleteRecord = (id: string): void => {
+  const current = getRecordsInternal();
+  const updated = current.filter(r => r.id !== id);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+  notifyUpdates();
 };
 
-export const deleteCustomComment = async (commentToDelete: string): Promise<void> => {
-    const commentsRef = ref(db, CUSTOM_COMMENTS_REF);
-    onValue(commentsRef, (snapshot) => {
-        if (snapshot.exists()) {
-            const currentComments: string[] = snapshot.val();
-            const updatedComments = currentComments.filter(c => c !== commentToDelete);
-            set(commentsRef, updatedComments);
-        }
-    }, { onlyOnce: true });
+export const deleteCustomComment = (commentToDelete: string): string[] => {
+  const customData = localStorage.getItem(CUSTOM_COMMENTS_KEY);
+  if (!customData) return getAvailableComments();
+
+  let customComments: string[] = JSON.parse(customData);
+  customComments = customComments.filter(c => c !== commentToDelete);
+  
+  localStorage.setItem(CUSTOM_COMMENTS_KEY, JSON.stringify(customComments));
+  return getAvailableComments();
 };
 
-
-export const clearAllRecords = (): Promise<void> => {
-  const recordsRef = ref(db, RECORDS_REF);
-  return remove(recordsRef);
+export const clearAllRecords = (): void => {
+  localStorage.removeItem(STORAGE_KEY);
+  // We do NOT clear CUSTOM_COMMENTS_KEY so autocomplete keeps getting smarter
+  notifyUpdates();
 };
 
 // Real-time Subscription Mechanism
 export const subscribeToRecords = (callback: (records: ProductionRecord[]) => void) => {
-  const recordsRef = ref(db, RECORDS_REF);
+  // Initial load
+  callback(getRecordsInternal());
 
-  const listener = onValue(recordsRef, (snapshot) => {
-    if (snapshot.exists()) {
-      const data = snapshot.val();
-      // Firebase returns an object, so we convert it to an array
-      const recordsArray: ProductionRecord[] = Object.keys(data).map(key => ({
-        id: key,
-        ...data[key]
-      })).reverse(); // Reverse to show latest records first
-      callback(recordsArray);
-    } else {
-      callback([]); // No records found
+  const handleMessage = (event: MessageEvent) => {
+    if (event.data.type === 'UPDATE') {
+      callback(getRecordsInternal());
     }
-  });
+  };
 
-  // Return the unsubscribe function
-  return () => listener();
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key === STORAGE_KEY) {
+      callback(getRecordsInternal());
+    }
+  };
+
+  const handleLocalUpdate = () => {
+    callback(getRecordsInternal());
+  };
+
+  SYNC_CHANNEL.addEventListener('message', handleMessage);
+  window.addEventListener('storage', handleStorage);
+  window.addEventListener(LOCAL_EVENT_NAME, handleLocalUpdate);
+
+  return () => {
+    SYNC_CHANNEL.removeEventListener('message', handleMessage);
+    window.removeEventListener('storage', handleStorage);
+    window.removeEventListener(LOCAL_EVENT_NAME, handleLocalUpdate);
+  };
 };
 
-
-// --- EXPORT FUNCTIONS (No changes needed here) ---
+// --- EXPORT FUNCTIONS ---
 
 export const exportToExcel = (records: ProductionRecord[]) => {
+  // Format data for Excel
   const data = records.map(r => ({
     'Fecha': r.date,
     'Turno': r.shift,
@@ -117,7 +127,8 @@ export const exportToExcel = (records: ProductionRecord[]) => {
   const worksheet = XLSX.utils.json_to_sheet(data);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "Producción");
-
+  
+  // Auto-width columns (approximate)
   const wscols = [
     {wch: 12}, {wch: 10}, {wch: 15}, {wch: 10}, {wch: 12}, {wch: 10}, {wch: 30}
   ];
@@ -129,6 +140,7 @@ export const exportToExcel = (records: ProductionRecord[]) => {
 export const exportToPDF = (records: ProductionRecord[]) => {
   const doc = new jsPDF();
 
+  // Header
   doc.setFontSize(18);
   doc.setTextColor(40);
   doc.text("Reporte de Producción - Registro Jefe de Turnos", 14, 22);
@@ -137,6 +149,7 @@ export const exportToPDF = (records: ProductionRecord[]) => {
   doc.setTextColor(100);
   doc.text(`Fecha de generación: ${new Date().toLocaleDateString()}`, 14, 30);
 
+  // Table Data
   const tableColumn = ["Fecha", "Turno", "Jefe", "Máquina", "Metros", "Cambios", "Comentarios"];
   const tableRows = records.map(r => [
     r.date,
@@ -148,13 +161,14 @@ export const exportToPDF = (records: ProductionRecord[]) => {
     r.changesComment
   ]);
 
+  // Generate Table
   (doc as any).autoTable({
     head: [tableColumn],
     body: tableRows,
     startY: 40,
     theme: 'grid',
     styles: { fontSize: 9, cellPadding: 3 },
-    headStyles: { fillColor: [41, 128, 185], textColor: 255 },
+    headStyles: { fillColor: [41, 128, 185], textColor: 255 }, // Blue header
     alternateRowStyles: { fillColor: [245, 245, 245] }
   });
 
