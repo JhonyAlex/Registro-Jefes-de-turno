@@ -9,13 +9,12 @@ import 'jspdf-autotable';
 // --- FIREBASE SETUP ---
 
 const firebaseConfig = {
-  apiKey: "AIzaSyAIGl22C3PlPRVxAm-gLKwZJhc0-7KkLB4",
-  authDomain: "registro-jefe-de-turno.firebaseapp.com",
-  databaseURL: "https://registro-jefe-de-turno-default-rtdb.firebaseio.com",
-  projectId: "registro-jefe-de-turno",
-  storageBucket: "registro-jefe-de-turno.firebasestorage.app",
-  messagingSenderId: "940166605641",
-  appId: "1:940166605641:web:f598a055e8eda2875dc898"
+  apiKey: "AIzaSyD_qVRzPGYgf6fdxsNMnwwqTWk8Hphtiuk",
+  authDomain: "registro-jefe-de-turno-2026.firebaseapp.com",
+  projectId: "registro-jefe-de-turno-2026",
+  storageBucket: "registro-jefe-de-turno-2026.firebasestorage.app",
+  messagingSenderId: "135445352312",
+  appId: "1:135445352312:web:0dc221e5e8bd748280428d"
 };
 
 // Initialize Firebase
