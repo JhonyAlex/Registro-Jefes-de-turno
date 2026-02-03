@@ -1,12 +1,19 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenerativeAI } from "@google/genai";
 import { ProductionRecord } from "../types";
 
-// Initialize Gemini Client
-// Note: In a real production environment, ensure API keys are not exposed to the client directly if possible,
-// or use a proxy. For this demo, we rely on the injected process.env.API_KEY.
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Get the API key from environment variables
+const API_KEY = import.meta.env.VITE_GEMINI_API_KEY as string;
+
+// Initialize Gemini Client only if the API key is available
+const genAI = API_KEY ? new GoogleGenerativeAI(API_KEY) : null;
+const model = genAI ? genAI.getGenerativeModel({ model: "gemini-1.5-flash" }) : null;
+
 
 export const analyzeShiftData = async (records: ProductionRecord[]): Promise<string> => {
+  if (!model) {
+    return "El servicio de análisis inteligente no está configurado. Para usar esta función, añada una VITE_GEMINI_API_KEY a su archivo .env.local.";
+  }
+  
   try {
     // Limit to last 20 records to avoid token limits in this demo
     const recentRecords = records.slice(0, 20);
@@ -28,14 +35,17 @@ export const analyzeShiftData = async (records: ProductionRecord[]): Promise<str
       Usa un tono profesional y directivo.
     `;
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: prompt,
-    });
+    const result = await model.generateContent(prompt);
+    const response = result.response;
+    const text = response.text();
+    return text || "No se pudo generar el análisis.";
 
-    return response.text || "No se pudo generar el análisis.";
   } catch (error) {
     console.error("Error calling Gemini API:", error);
-    return "Error al conectar con el servicio de análisis inteligente. Verifique su conexión o clave API.";
+    // Provide a more specific error message if an API key issue is detected
+    if (error instanceof Error && error.message.includes('API key not valid')) {
+        return "Error: La clave de API de Gemini no es válida. Por favor, verifique la clave en su archivo .env.local.";
+    }
+    return "Error al conectar con el servicio de análisis inteligente. Verifique la consola para más detalles.";
   }
 };
